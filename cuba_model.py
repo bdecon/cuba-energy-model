@@ -788,4 +788,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Cuba Energy System Model")
+    parser.add_argument(
+        "--scenario", type=int, choices=[1, 2, 3, 4, 5, 6],
+        help="Run a single scenario (default: run all)",
+    )
+    args = parser.parse_args()
+
+    if args.scenario:
+        ts = load_timeseries()
+        print(f"Loaded time series: {len(ts)} hours")
+        print(f"Annual demand: {ts['demand_mwh'].sum()/1e6:.1f} TWh")
+        run_scenario(args.scenario, ts)
+    else:
+        main()

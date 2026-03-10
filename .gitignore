@@ -1,3 +1,19 @@
 __pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Large reference files (not redistributable)
 data/Economy*
 data/FFRC_eBook_3-2022.pdf
+data/onei/
+reiner_lemoine_institut-CURE_Preprint-2024.pdf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
