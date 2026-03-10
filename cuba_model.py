@@ -715,17 +715,34 @@ def print_results(summary, objective):
 
 def run_scenario(scenario_num, ts):
     """Run a single scenario."""
-    print(f"\nBuilding Scenario {scenario_num}...")
+    import time
+
+    scenario_names = {
+        1: "BAU (Business as Usual)",
+        2: "37% RES Target Review",
+        3: "37% RES Target Alternative",
+        4: "Overall Cost-Optimal",
+        5: "100% RES Target Review",
+        6: "100% RES Target Alternative",
+    }
+
+    name = scenario_names.get(scenario_num, f"Scenario {scenario_num}")
+    print(f"\n  Building Scenario {scenario_num}: {name}...")
     es, res_target = build_energy_system(scenario_num, ts)
 
-    print(f"Solving Scenario {scenario_num}...")
+    print(f"  Solving (this can take 1-3 minutes)...", end="", flush=True)
+    t0 = time.time()
     try:
         results, objective = solve_model(es, res_constraint=res_target)
+        elapsed = time.time() - t0
+        print(f" done in {elapsed:.0f}s")
         summary = extract_results(results, es, scenario_num, ts)
         lcoe = print_results(summary, objective)
         return summary, objective, lcoe
     except Exception as e:
-        print(f"  Scenario {scenario_num} FAILED: {e}")
+        elapsed = time.time() - t0
+        print(f" FAILED after {elapsed:.0f}s")
+        print(f"  Error: {e}")
         return None, None, None
 
 

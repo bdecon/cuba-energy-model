@@ -14,9 +14,9 @@ Key findings from the paper: the cost-optimal mix reaches ~83% renewables at 7.3
 
 Download Python 3.10+ from [python.org](https://www.python.org/downloads/). During installation, **check "Add Python to PATH"**.
 
-### 2. Create a virtual environment
+### 2. Run setup
 
-Open a terminal (PowerShell or Command Prompt) in this project folder:
+Double-click `setup.bat`, or open a terminal (PowerShell or Command Prompt) in this project folder and run:
 
 ```powershell
 python -m venv venv
@@ -28,15 +28,15 @@ pip install -r requirements.txt
 
 ### 3. Run the model
 
+The most interesting scenario is **Scenario 6: 100% Renewable Cost-Optimal** — it finds the cheapest way to power Cuba entirely with renewables:
+
 ```powershell
-python cuba_model.py
+python cuba_model.py --scenario 6
 ```
 
-This runs all 6 scenarios and prints a comparison table. Takes a few minutes.
-
-To run a single scenario (faster for testing):
+To run all 6 scenarios (takes several minutes):
 ```powershell
-python cuba_model.py --scenario 4
+python cuba_model.py
 ```
 
 ## Project Structure
