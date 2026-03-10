@@ -14,12 +14,13 @@ The model references official Cuban energy statistics for validation. Download f
 
 **Source**: ONEI (Oficina Nacional de Estadísticas e Información de Cuba)
 **File**: Anuario Estadístico de Cuba 2024, Chapter 10: "Minería y Energía"
-**URL**: https://www.onei.gob.cu/publicaciones-tipo/anuario-estadistico-de-cuba
 
-1. Go to the ONEI website above
-2. Download the 2024 Anuario Estadístico
-3. Extract the chapter 10 Excel file (`10 Mineria y Energia_AEC2024.xlsx`)
+1. Go to https://www.onei.gob.cu/anuario-estadistico-de-cuba-2024
+2. Download the Excel RAR archive (link at bottom of page: "compressed file containing all chapter tables in EXCEL format")
+3. Extract `10 Mineria y Energia_AEC2024.xlsx` from the RAR
 4. Place it in `data/onei/`
+
+Key sheets: 10.14 (electricity balance), 10.15-17 (generation by source), 10.18-19 (installed capacity by plant type).
 
 This file is used for validation only — the model runs fine without it.
 
