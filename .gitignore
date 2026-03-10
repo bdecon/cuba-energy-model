@@ -7,7 +7,6 @@ venv/
 # Large reference files (not redistributable)
 data/Economy*
 data/FFRC_eBook_3-2022.pdf
-data/onei/
 reiner_lemoine_institut-CURE_Preprint-2024.pdf
 
 # IDE
