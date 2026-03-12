@@ -1,16 +1,18 @@
 """
-Cuba Energy System Model - Replication of CURE Preprint (Reiner Lemoine Institut)
+Cuba Energy System Model - Working version with improvements
 
-Uses oemof-solph to model Cuba's electricity system and find cost-optimal
-technology mixes under different renewable energy share (RES) constraints.
+Based on Brandts et al. (2024, Energy 306) with corrections and enhancements:
+- Timezone-corrected solar/wind (UTC-5)
+- Multi-site eastern Cuba wind data (Gibara, Las Tunas, Camagüey)
+- Research-based hydro capacity factors
+- Existing plant fixed O&M included in LCOE
+- 3 battery c-rate options (1, 0.5, 0.25)
 
-6 Scenarios:
-1. BAU - Business as usual (no new investments)
-2. 37% RES Target Review (government expansion plan)
-3. 37% RES Target Alternative (cost-optimal with 37% RES constraint)
-4. Overall Cost-Optimal (no RES constraint)
-5. 100% RES Target Review (government plan - expected infeasible)
-6. 100% RES Target Alternative (cost-optimal with 100% RES constraint)
+Reference versions (frozen, do not modify):
+- cuba_model_ref_utc.py: Paper replication with UTC error (best paper match)
+- cuba_model_ref_local.py: Paper replication with TZ correction
+
+Timeseries: data/timeseries.csv (TZ-corrected, multi-site wind)
 """
 
 import os
@@ -145,15 +147,39 @@ POWER_PLANTS = {
     },
 }
 
-# Battery storage parameters (Table 5) - using c-rate = 1 as base
-BATTERY = {
-    "storage_capex_per_mwh": 211_000,  # USD/MWh (c-rate 1)
-    "power_capex_per_mw": 51_500,  # USD/MW input power (c-rate 1)
-    "storage_fix_opex": 2_750,  # USD/MWh/year
-    "efficiency": 0.875,  # roundtrip = sqrt(0.875) charge * sqrt(0.875) discharge
-    "lifetime": 20,
-    "c_rate": 1,
-}
+# Battery storage parameters (Table 5) - three c-rate options
+# The optimizer chooses how much of each type to build (or none).
+BATTERIES = [
+    {
+        "label": "battery_crate1",
+        "storage_capex_per_mwh": 211_000,  # USD/MWh
+        "power_capex_per_mw": 51_500,  # USD/MW input power
+        "storage_fix_opex": 2_750,  # USD/MWh/year
+        "efficiency": 0.875,  # roundtrip (applied on output)
+        "lifetime": 20,
+        "c_rate": 1,
+    },
+    {
+        "label": "battery_crate05",
+        "storage_capex_per_mwh": 193_000,
+        "power_capex_per_mw": 62_000,
+        "storage_fix_opex": 2_650,
+        "efficiency": 0.875,
+        "lifetime": 20,
+        "c_rate": 0.5,
+    },
+    {
+        "label": "battery_crate025",
+        "storage_capex_per_mwh": 189_000,
+        "power_capex_per_mw": 45_500,
+        "storage_fix_opex": 2_000,
+        "efficiency": 0.875,
+        "lifetime": 20,
+        "c_rate": 0.25,
+    },
+]
+# Keep single BATTERY reference for backward compatibility in investment calc
+BATTERY = BATTERIES[0]
 
 
 def load_timeseries():
@@ -444,40 +470,41 @@ def build_energy_system(scenario, ts):
                 )
 
     # ========================================================================
-    # Battery Storage
+    # Battery Storage (three c-rate options, optimizer chooses mix)
     # ========================================================================
     if allow_storage:
-        storage_ann = annuity(BATTERY["storage_capex_per_mwh"], BATTERY["lifetime"])
-        power_ann = annuity(BATTERY["power_capex_per_mw"], BATTERY["lifetime"])
+        for batt in BATTERIES:
+            storage_ann = annuity(batt["storage_capex_per_mwh"], batt["lifetime"])
+            power_ann = annuity(batt["power_capex_per_mw"], batt["lifetime"])
 
-        # In oemof-solph, GenericStorage with investment
-        inflow_eff = np.sqrt(BATTERY["efficiency"])
-        outflow_eff = np.sqrt(BATTERY["efficiency"])
+            # Paper applies 87.5% efficiency entirely on output side
+            inflow_eff = 1.0
+            outflow_eff = batt["efficiency"]
 
-        es.add(
-            solph.components.GenericStorage(
-                label="battery_storage",
-                inputs={
-                    b_electricity: solph.Flow(
-                        nominal_value=solph.Investment(ep_costs=power_ann),
-                    )
-                },
-                outputs={
-                    b_electricity: solph.Flow(
-                        nominal_value=solph.Investment(ep_costs=0),
-                    )
-                },
-                nominal_storage_capacity=solph.Investment(
-                    ep_costs=storage_ann + BATTERY["storage_fix_opex"],
-                ),
-                loss_rate=0,
-                inflow_conversion_factor=inflow_eff,
-                outflow_conversion_factor=outflow_eff,
-                balanced=True,  # Storage level same at start and end
-                invest_relation_input_capacity=BATTERY["c_rate"],
-                invest_relation_output_capacity=BATTERY["c_rate"],
+            es.add(
+                solph.components.GenericStorage(
+                    label=batt["label"],
+                    inputs={
+                        b_electricity: solph.Flow(
+                            nominal_value=solph.Investment(ep_costs=power_ann),
+                        )
+                    },
+                    outputs={
+                        b_electricity: solph.Flow(
+                            nominal_value=solph.Investment(ep_costs=0),
+                        )
+                    },
+                    nominal_storage_capacity=solph.Investment(
+                        ep_costs=storage_ann + batt["storage_fix_opex"],
+                    ),
+                    loss_rate=0,
+                    inflow_conversion_factor=inflow_eff,
+                    outflow_conversion_factor=outflow_eff,
+                    balanced=True,
+                    invest_relation_input_capacity=batt["c_rate"],
+                    invest_relation_output_capacity=batt["c_rate"],
+                )
             )
-        )
 
     return es, res_constraint
 
@@ -516,7 +543,7 @@ def solve_model(es, res_constraint=None, solver="highs"):
             # Check if this node has output to electricity bus
             if hasattr(node, "outputs") and e_bus in node.outputs:
                 # Skip excess and storage
-                if label in ["electricity_excess", "battery_storage"]:
+                if label == "electricity_excess" or label.startswith("battery_"):
                     continue
                 if base_name in re_names:
                     re_flows.append((node, e_bus))
@@ -581,8 +608,7 @@ def extract_results(results, es, scenario, ts):
                 if label in [
                     "electricity_excess",
                     "electricity_demand",
-                    "battery_storage",
-                ]:
+                ] or label.startswith("battery_"):
                     continue
 
                 flow_data = node_data["sequences"]["flow"]
@@ -593,19 +619,26 @@ def extract_results(results, es, scenario, ts):
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
                     capacities[label] = node_data["scalars"]["invest"]
 
-    # Storage results
+    # Storage results (aggregate across all battery c-rate options)
     storage_capacity = 0
     storage_power = 0
+    storage_details = {}
+    battery_labels = {b["label"] for b in BATTERIES}
     for node_label, node_data in results.items():
         from_node, to_node = node_label
-        if hasattr(from_node, "label") and from_node.label == "battery_storage":
+        if hasattr(from_node, "label") and from_node.label in battery_labels:
+            blabel = from_node.label
             if to_node is None:
-                # Storage internal (capacity)
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
-                    storage_capacity = node_data["scalars"]["invest"]
+                    cap = node_data["scalars"]["invest"]
+                    storage_capacity += cap
+                    storage_details[blabel] = {"mwh": cap}
             elif hasattr(to_node, "label") and to_node.label == "electricity_bus":
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
-                    storage_power = node_data["scalars"]["invest"]
+                    pwr = node_data["scalars"]["invest"]
+                    storage_power += pwr
+                    if blabel in storage_details:
+                        storage_details[blabel]["mw"] = pwr
 
     # Categorize renewable vs non-renewable generation
     re_labels = []
@@ -645,10 +678,48 @@ def extract_results(results, es, scenario, ts):
             elif base in POWER_PLANTS:
                 total_investment += cap * POWER_PLANTS[base]["capex_per_mw"]
 
-    # Storage investment
-    if storage_capacity > 0:
-        total_investment += storage_capacity * BATTERY["storage_capex_per_mwh"]
-        total_investment += storage_power * BATTERY["power_capex_per_mw"]
+    # Storage investment (per battery type with correct costs)
+    batt_lookup = {b["label"]: b for b in BATTERIES}
+    for blabel, bdata in storage_details.items():
+        bparams = batt_lookup[blabel]
+        total_investment += bdata.get("mwh", 0) * bparams["storage_capex_per_mwh"]
+        total_investment += bdata.get("mw", 0) * bparams["power_capex_per_mw"]
+
+    # Calculate fixed O&M for existing plants (not in optimizer objective)
+    # These are real ongoing costs that affect LCOE but not dispatch decisions
+    existing_fixed_om = 0
+    if scenario in [3, 4, 6]:
+        # Investment scenarios: existing capacity = installed_cap from params
+        for re_name, re_params in RENEWABLES.items():
+            existing_fixed_om += re_params["installed_cap"] * re_params["fix_opex"]
+        for pp_name, pp_params in POWER_PLANTS.items():
+            existing_fixed_om += pp_params["installed_cap"] * pp_params["fix_opex"]
+    elif scenario == 1:
+        # BAU: all capacity is existing
+        for re_name, re_params in RENEWABLES.items():
+            existing_fixed_om += re_params["installed_cap"] * re_params["fix_opex"]
+        for pp_name, pp_params in POWER_PLANTS.items():
+            existing_fixed_om += pp_params["installed_cap"] * pp_params["fix_opex"]
+    elif scenario == 2:
+        re_caps_s2 = {"solar_pv": 2104, "wind": 807, "hydro": 116}
+        pp_caps_s2 = {
+            "oil_power_plant": 2608, "ccgt": 506, "bioelectric": 612,
+            "diesel_genset": 1293, "hfo_genset": 1378,
+        }
+        for name, cap in re_caps_s2.items():
+            existing_fixed_om += cap * RENEWABLES[name]["fix_opex"]
+        for name, cap in pp_caps_s2.items():
+            existing_fixed_om += cap * POWER_PLANTS[name]["fix_opex"]
+    elif scenario == 5:
+        re_caps_s5 = {"solar_pv": 13000, "wind": 1800, "hydro": 56}
+        pp_caps_s5 = {
+            "oil_power_plant": 2608, "ccgt": 506, "bioelectric": 612,
+            "diesel_genset": 1293, "hfo_genset": 1378,
+        }
+        for name, cap in re_caps_s5.items():
+            existing_fixed_om += cap * RENEWABLES[name]["fix_opex"]
+        for name, cap in pp_caps_s5.items():
+            existing_fixed_om += cap * POWER_PLANTS[name]["fix_opex"]
 
     summary["res_share"] = res_share
     summary["total_generation_twh"] = total_generation / 1e6
@@ -657,7 +728,9 @@ def extract_results(results, es, scenario, ts):
     summary["new_capacities"] = capacities
     summary["storage_mwh"] = storage_capacity
     summary["storage_mw"] = storage_power
+    summary["storage_details"] = storage_details
     summary["total_investment"] = total_investment
+    summary["existing_fixed_om"] = existing_fixed_om
 
     return summary
 
@@ -683,10 +756,14 @@ def print_results(summary, objective):
     print(f"  RES share:            {summary['res_share']*100:.1f}%")
 
     # LCOE calculation
-    # Objective is total system cost (annualized)
-    lcoe = objective / (total_gen * 1e6) / 10 if total_gen > 0 else 0  # US cents/kWh
-    print(f"  System cost:          {objective/1e9:.2f} Bn USD/year")
-    print(f"  Average LCOE:         {lcoe:.1f} US cents/kWh_el")
+    # Objective is total system cost (annualized) but excludes existing plant fixed O&M
+    existing_fom = summary.get("existing_fixed_om", 0)
+    full_system_cost = objective + existing_fom
+    lcoe = full_system_cost / (total_gen * 1e6) / 10 if total_gen > 0 else 0  # US cents/kWh
+    print(f"  System cost (optimizer):  {objective/1e9:.2f} Bn USD/year")
+    print(f"  Existing plant fixed O&M: {existing_fom/1e6:.0f} M USD/year")
+    print(f"  Full system cost:         {full_system_cost/1e9:.2f} Bn USD/year")
+    print(f"  Average LCOE:             {lcoe:.1f} US cents/kWh_el")
 
     # Generation breakdown
     print(f"\n  Generation by technology:")
@@ -708,6 +785,11 @@ def print_results(summary, objective):
 
     if summary["storage_mwh"] > 0:
         print(f"\n  Battery storage: {summary['storage_mwh']:.0f} MWh / {summary['storage_mw']:.0f} MW")
+        for blabel, bdata in summary.get("storage_details", {}).items():
+            mwh = bdata.get("mwh", 0)
+            mw = bdata.get("mw", 0)
+            if mwh > 0.1:
+                print(f"    {blabel}: {mwh:.0f} MWh / {mw:.0f} MW")
 
     print()
     return lcoe
