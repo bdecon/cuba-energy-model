@@ -8,6 +8,8 @@ This model optimizes Cuba's electricity system for 2030 using linear programming
 
 Key findings from the paper: the cost-optimal mix reaches ~83% renewables at 7.3 cents/kWh — cheaper than the current fossil-heavy system at 11.6 cents/kWh.
 
+With updated 2025 costs (IRENA, Ember) and current Cuban commitments (2 GW solar, 427 MW wind), 100% renewables costs 8.8 cents/kWh — essentially the same as BAU — requiring $16.3 Bn in new investment (solar 58%, battery 16%, biomass 18%).
+
 ## Setup (Windows)
 
 ### 1. Install Python
@@ -39,15 +41,28 @@ To run all 6 scenarios (takes several minutes):
 python cuba_model.py
 ```
 
+For investment breakdown and sensitivity analysis:
+```powershell
+python calc_investment.py          # Scenario 6 investment breakdown
+python sensitivity_analysis.py     # Fuel price sensitivity + donor-funded buildout
+```
+
 ## Project Structure
 
 ```
-cuba_model.py              Main model (all parameters, solver, results)
+cuba_model.py              Active working model (2025 costs, DSM, pumped hydro)
+cuba_model_ref_utc.py      Frozen paper replication (UTC error, best paper match)
+cuba_model_ref_local.py    Frozen paper replication (timezone-corrected)
+cuba_model2.py             Kevin's version
+calc_investment.py         Investment breakdown for Scenario 6
+sensitivity_analysis.py    Fuel price sensitivity + phased buildout analysis
 generate_timeseries.py     Synthetic time series generator (fallback)
 generate_demand.py         Improved demand profiles
 integrate_ninja_data.py    Swap in real renewables.ninja data
 data/
-  timeseries.csv           Hourly input data (solar CF, wind CF, hydro CF, demand MW)
+  timeseries.csv           Active hourly input (TZ-corrected, multi-site wind)
+  timeseries_ref_utc.csv   Frozen paper replication timeseries (UTC)
+  timeseries_ref_local.csv Frozen paper replication timeseries (TZ-corrected)
   ninja_solar_raw.csv      Real solar capacity factors from renewables.ninja
   ninja_wind_raw.csv       Real wind capacity factors from renewables.ninja
   onei/                    Official Cuban energy statistics (ONEI 2024)
@@ -59,17 +74,19 @@ All technology parameters are defined as Python dictionaries at the top of `cuba
 
 - **`RENEWABLES`** — solar PV, wind, hydro: costs, capacities, lifetimes
 - **`POWER_PLANTS`** — oil, gas, diesel, HFO, biomass plants
-- **`BATTERY`** — storage costs and efficiency
+- **`BATTERIES`** / **`PUMPED_HYDRO`** — storage costs, efficiency, capacity limits
 - **`FUEL_PRICES`** — cost of each fuel per MWh thermal
+- **`TARGET_DEMAND_TWH`** — annual demand (21.3 TWh)
+- **`DSM_SHIFT_FRACTION`** — evening-to-midday demand shift (30%)
 - **`WACC`** — discount rate (7.5%)
 
-For example, to test cheaper solar panels, change `RENEWABLES["solar_pv"]["capex_per_mw"]` from `857_000` to a lower value and re-run.
+For example, to test cheaper solar panels, change `RENEWABLES["solar_pv"]["capex_per_mw"]` from `691_000` to a lower value and re-run.
 
 ## Data Sources
 
 - **Solar & wind profiles**: [renewables.ninja](https://www.renewables.ninja/) (satellite-derived, 2019 weather year, lat=22° lon=-79.5°)
 - **Demand profile**: Synthesized from CubaLinda model (Luukkanen et al., 2022) and ONEI statistics
-- **Technology costs**: Tables 2-5 of the CURE paper
+- **Technology costs**: Tables 2-5 of the CURE paper, updated with IRENA 2024 and Ember Oct 2025
 - **Installed capacities**: ONEI Anuario Estadístico 2024
 
 ## Troubleshooting

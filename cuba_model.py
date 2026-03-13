@@ -6,7 +6,7 @@ Based on Brandts et al. (2024, Energy 306) with corrections and enhancements:
 - Multi-site eastern Cuba wind data (Gibara, Las Tunas, Camagüey)
 - Research-based hydro capacity factors
 - Existing plant fixed O&M included in LCOE
-- 3 battery c-rate options (1, 0.5, 0.25)
+- Battery + pumped hydro storage options
 
 Reference versions (frozen, do not modify):
 - cuba_model_ref_utc.py: Paper replication with UTC error (best paper match)
@@ -44,22 +44,24 @@ def annuity(capex, lifetime, wacc=WACC):
 
 
 # ============================================================================
-# TECHNOLOGY PARAMETERS (from Tables 2-5 of the paper)
+# TECHNOLOGY PARAMETERS
+# Base: Brandts et al. (2024) Tables 2-5
+# Updated: Kevin's 2025 assumptions + IRENA 2024 report (released Jul 2025)
 # ============================================================================
 
-# Volatile renewables (Table 2)
+# Volatile renewables (Table 2, with 2025 updates)
 RENEWABLES = {
     "solar_pv": {
-        "capex_per_mw": 857_000,  # USD/MW (857 USD/kWp)
-        "installed_cap": 230,  # MW
+        "capex_per_mw": 691_000,  # USD/MW (IRENA 2024 global weighted avg, Jul 2025)
+        "installed_cap": 2_000,  # MW (900 built + 1,100 committed, Kevin 2025)
         "max_cap": None,  # No limit
         "lifetime": 30,
         "fix_opex": 10_000,  # USD/MW/year
         "var_opex": 0,
     },
     "wind": {
-        "capex_per_mw": 1_325_000,  # USD/MW
-        "installed_cap": 12,  # MW
+        "capex_per_mw": 1_041_000,  # USD/MW (IRENA 2024 global weighted avg, Jul 2025)
+        "installed_cap": 427,  # MW (12 built + 415 committed, Kevin 2025)
         "max_cap": None,
         "lifetime": 20,
         "fix_opex": 44_500,  # USD/MW/year
@@ -67,7 +69,7 @@ RENEWABLES = {
     },
     "hydro": {
         "capex_per_mw": 2_000_000,  # USD/MW
-        "installed_cap": 60,  # MW
+        "installed_cap": 65,  # MW (Brandts Fig 1 correction, Kevin 2025)
         "max_cap": 135,  # MW (resource limit)
         "lifetime": 30,
         "fix_opex": 60_000,  # USD/MW/year
@@ -147,44 +149,73 @@ POWER_PLANTS = {
     },
 }
 
-# Battery storage parameters (Table 5) - three c-rate options
-# The optimizer chooses how much of each type to build (or none).
+# Battery storage parameters (updated 2025)
+# All-in installed cost of $125/kWh (Ember Oct 2025: $75 equipment + $50 install)
+# c_rate=0.25 (4-hour battery) — power = capacity/4, realistic for grid-scale.
 BATTERIES = [
     {
-        "label": "battery_crate1",
-        "storage_capex_per_mwh": 211_000,  # USD/MWh
-        "power_capex_per_mw": 51_500,  # USD/MW input power
-        "storage_fix_opex": 2_750,  # USD/MWh/year
+        "label": "battery_storage",
+        "storage_capex_per_mwh": 125_000,  # USD/MWh all-in (Ember Oct 2025)
+        "power_capex_per_mw": 0,  # USD/MW (folded into storage cost)
+        "storage_fix_opex": 2_500,  # USD/MWh/year (~2% of CAPEX, Ember 2025)
         "efficiency": 0.875,  # roundtrip (applied on output)
         "lifetime": 20,
-        "c_rate": 1,
-    },
-    {
-        "label": "battery_crate05",
-        "storage_capex_per_mwh": 193_000,
-        "power_capex_per_mw": 62_000,
-        "storage_fix_opex": 2_650,
-        "efficiency": 0.875,
-        "lifetime": 20,
-        "c_rate": 0.5,
-    },
-    {
-        "label": "battery_crate025",
-        "storage_capex_per_mwh": 189_000,
-        "power_capex_per_mw": 45_500,
-        "storage_fix_opex": 2_000,
-        "efficiency": 0.875,
-        "lifetime": 20,
-        "c_rate": 0.25,
+        "c_rate": 0.25,  # 4-hour battery (power = capacity / 4)
     },
 ]
-# Keep single BATTERY reference for backward compatibility in investment calc
 BATTERY = BATTERIES[0]
+
+# Pumped hydro storage (Saunders et al. 2026; PNNL 2022; NREL ATB 2024)
+# Cuba has 25 identified sites with ~20 GW potential (CubaLinda)
+PUMPED_HYDRO = {
+    "label": "pumped_hydro_storage",
+    "storage_capex_per_mwh": 142_000,   # USD/MWh (PNNL 2022)
+    "power_capex_per_mw": 1_100_000,    # USD/MW (NREL ATB 2024)
+    "power_fix_opex": 18_000,           # USD/MW/year (NREL ATB 2024)
+    "efficiency": 0.80,                 # roundtrip
+    "lifetime": 60,                     # years (key advantage over Li-ion)
+    "c_rate": 0.1,                      # 10-hour system
+    "max_storage_mwh": 40_000,          # Upper bound (CubaLinda Scenario 1)
+    "max_power_mw": 4_000,              # Upper bound
+}
+
+
+# ============================================================================
+# DEMAND SCALING AND DSM PARAMETERS (Kevin 2025)
+# ============================================================================
+TARGET_DEMAND_TWH = 21.3  # 19 TWh consumption + 11% T&D losses (post-grid-modernization)
+DSM_SHIFT_FRACTION = 0.30  # 30% of evening peak demand shifted to midday
+DSM_EVENING_HOURS = (18, 19, 20, 21)  # 6pm-9pm
+DSM_MIDDAY_HOURS = (10, 11, 12, 13)  # 10am-1pm
 
 
 def load_timeseries():
-    """Load time series data."""
+    """Load time series data, scale demand to 21 TWh, and apply DSM."""
     ts = pd.read_csv(os.path.join(DATA_DIR, "timeseries.csv"))
+
+    # Scale demand from base profile to target
+    original_total = ts["demand_mwh"].sum()
+    scale_factor = TARGET_DEMAND_TWH * 1e6 / original_total
+    ts["demand_mwh"] = ts["demand_mwh"] * scale_factor
+
+    # Apply DSM: shift 30% of evening demand to midday
+    ts["hour"] = pd.to_datetime(ts["timestamp"]).dt.hour
+
+    evening_mask = ts["hour"].isin(DSM_EVENING_HOURS)
+    midday_mask = ts["hour"].isin(DSM_MIDDAY_HOURS)
+
+    energy_removed = ts.loc[evening_mask, "demand_mwh"].values * DSM_SHIFT_FRACTION
+    total_shifted = energy_removed.sum()
+
+    # Remove 30% from evening hours
+    ts.loc[evening_mask, "demand_mwh"] *= (1 - DSM_SHIFT_FRACTION)
+
+    # Distribute shifted energy proportionally across midday hours
+    midday_demand = ts.loc[midday_mask, "demand_mwh"].values
+    midday_total = midday_demand.sum()
+    ts.loc[midday_mask, "demand_mwh"] += total_shifted * (midday_demand / midday_total)
+
+    ts.drop(columns=["hour"], inplace=True)
     return ts
 
 
@@ -201,7 +232,8 @@ def calc_annual_fixed_cost(capex, lifetime, fix_opex):
     return annuity(capex, lifetime) + fix_opex
 
 
-def build_energy_system(scenario, ts):
+def build_energy_system(scenario, ts, fuel_prices=None,
+                        extra_solar_mw=0, extra_battery_mwh=0):
     """
     Build the oemof energy system for a given scenario.
 
@@ -212,7 +244,14 @@ def build_energy_system(scenario, ts):
     4: Overall cost-optimal - no RES constraint, full optimization
     5: 100% RES target review - use government 100% targets
     6: 100% RES target alternative - optimize with 100% RES constraint
+
+    Optional overrides for sensitivity analysis:
+    fuel_prices: dict of fuel prices (defaults to FUEL_PRICES)
+    extra_solar_mw: additional fixed solar capacity (MW)
+    extra_battery_mwh: additional fixed battery capacity (MWh)
     """
+    fuel_prices = fuel_prices if fuel_prices is not None else FUEL_PRICES
+
     date_range = pd.date_range("2030-01-01", periods=8760, freq="h")
     es = solph.EnergySystem(timeindex=date_range, infer_last_interval=True)
 
@@ -245,7 +284,7 @@ def build_energy_system(scenario, ts):
                 label=f"source_{fuel_name}",
                 outputs={
                     bus: solph.Flow(
-                        variable_costs=FUEL_PRICES[fuel_name],
+                        variable_costs=fuel_prices[fuel_name],
                     )
                 },
             )
@@ -506,6 +545,76 @@ def build_energy_system(scenario, ts):
                 )
             )
 
+    # ========================================================================
+    # Pumped Hydro Storage (investment-optimized, with capacity limit)
+    # ========================================================================
+    if allow_storage:
+        ph = PUMPED_HYDRO
+        ph_storage_ann = annuity(ph["storage_capex_per_mwh"], ph["lifetime"])
+        ph_power_ann = annuity(ph["power_capex_per_mw"], ph["lifetime"]) + ph["power_fix_opex"]
+
+        es.add(
+            solph.components.GenericStorage(
+                label=ph["label"],
+                inputs={
+                    b_electricity: solph.Flow(
+                        nominal_value=solph.Investment(
+                            ep_costs=ph_power_ann,
+                            maximum=ph["max_power_mw"],
+                        ),
+                    )
+                },
+                outputs={
+                    b_electricity: solph.Flow(
+                        nominal_value=solph.Investment(ep_costs=0),
+                    )
+                },
+                nominal_storage_capacity=solph.Investment(
+                    ep_costs=ph_storage_ann,
+                    maximum=ph["max_storage_mwh"],
+                ),
+                loss_rate=0,
+                inflow_conversion_factor=1.0,
+                outflow_conversion_factor=ph["efficiency"],
+                balanced=True,
+                invest_relation_input_capacity=ph["c_rate"],
+                invest_relation_output_capacity=ph["c_rate"],
+            )
+        )
+
+    # ========================================================================
+    # Additional fixed capacity (for phased buildout / sensitivity analysis)
+    # ========================================================================
+    if extra_solar_mw > 0:
+        es.add(
+            solph.components.Source(
+                label="solar_pv_added",
+                outputs={
+                    b_electricity: solph.Flow(
+                        nominal_value=extra_solar_mw,
+                        max=ts["solar_pv"].values,
+                        variable_costs=0,
+                    )
+                },
+            )
+        )
+
+    if extra_battery_mwh > 0:
+        batt = BATTERY
+        power_mw = extra_battery_mwh * batt["c_rate"]
+        es.add(
+            solph.components.GenericStorage(
+                label="battery_added",
+                inputs={b_electricity: solph.Flow(nominal_value=power_mw)},
+                outputs={b_electricity: solph.Flow(nominal_value=power_mw)},
+                nominal_storage_capacity=extra_battery_mwh,
+                loss_rate=0,
+                inflow_conversion_factor=1.0,
+                outflow_conversion_factor=batt["efficiency"],
+                balanced=True,
+            )
+        )
+
     return es, res_constraint
 
 
@@ -543,7 +652,7 @@ def solve_model(es, res_constraint=None, solver="highs"):
             # Check if this node has output to electricity bus
             if hasattr(node, "outputs") and e_bus in node.outputs:
                 # Skip excess and storage
-                if label == "electricity_excess" or label.startswith("battery_"):
+                if label == "electricity_excess" or label.startswith("battery_") or label.startswith("pumped_hydro"):
                     continue
                 if base_name in re_names:
                     re_flows.append((node, e_bus))
@@ -608,7 +717,7 @@ def extract_results(results, es, scenario, ts):
                 if label in [
                     "electricity_excess",
                     "electricity_demand",
-                ] or label.startswith("battery_"):
+                ] or label.startswith("battery_") or label.startswith("pumped_hydro"):
                     continue
 
                 flow_data = node_data["sequences"]["flow"]
@@ -619,31 +728,31 @@ def extract_results(results, es, scenario, ts):
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
                     capacities[label] = node_data["scalars"]["invest"]
 
-    # Storage results (aggregate across all battery c-rate options)
+    # Storage results (batteries + pumped hydro)
     storage_capacity = 0
     storage_power = 0
     storage_details = {}
-    battery_labels = {b["label"] for b in BATTERIES}
+    all_storage_labels = {b["label"] for b in BATTERIES} | {PUMPED_HYDRO["label"]}
     for node_label, node_data in results.items():
         from_node, to_node = node_label
-        if hasattr(from_node, "label") and from_node.label in battery_labels:
-            blabel = from_node.label
+        if hasattr(from_node, "label") and from_node.label in all_storage_labels:
+            slabel = from_node.label
             if to_node is None:
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
                     cap = node_data["scalars"]["invest"]
                     storage_capacity += cap
-                    storage_details[blabel] = {"mwh": cap}
+                    storage_details[slabel] = {"mwh": cap}
             elif hasattr(to_node, "label") and to_node.label == "electricity_bus":
                 if "scalars" in node_data and "invest" in node_data["scalars"]:
                     pwr = node_data["scalars"]["invest"]
                     storage_power += pwr
-                    if blabel in storage_details:
-                        storage_details[blabel]["mw"] = pwr
+                    if slabel in storage_details:
+                        storage_details[slabel]["mw"] = pwr
 
     # Categorize renewable vs non-renewable generation
     re_labels = []
     for label in generation:
-        base = label.replace("_existing", "").replace("_invest", "")
+        base = label.replace("_existing", "").replace("_invest", "").replace("_added", "")
         if base in ["solar_pv", "wind", "hydro", "bioelectric"]:
             re_labels.append(label)
 
@@ -678,12 +787,13 @@ def extract_results(results, es, scenario, ts):
             elif base in POWER_PLANTS:
                 total_investment += cap * POWER_PLANTS[base]["capex_per_mw"]
 
-    # Storage investment (per battery type with correct costs)
-    batt_lookup = {b["label"]: b for b in BATTERIES}
-    for blabel, bdata in storage_details.items():
-        bparams = batt_lookup[blabel]
-        total_investment += bdata.get("mwh", 0) * bparams["storage_capex_per_mwh"]
-        total_investment += bdata.get("mw", 0) * bparams["power_capex_per_mw"]
+    # Storage investment (batteries + pumped hydro)
+    storage_lookup = {b["label"]: b for b in BATTERIES}
+    storage_lookup[PUMPED_HYDRO["label"]] = PUMPED_HYDRO
+    for slabel, sdata in storage_details.items():
+        sparams = storage_lookup[slabel]
+        total_investment += sdata.get("mwh", 0) * sparams["storage_capex_per_mwh"]
+        total_investment += sdata.get("mw", 0) * sparams.get("power_capex_per_mw", 0)
 
     # Calculate fixed O&M for existing plants (not in optimizer objective)
     # These are real ongoing costs that affect LCOE but not dispatch decisions
@@ -784,12 +894,12 @@ def print_results(summary, objective):
                 print(f"    {label}: {cap:.0f} MW")
 
     if summary["storage_mwh"] > 0:
-        print(f"\n  Battery storage: {summary['storage_mwh']:.0f} MWh / {summary['storage_mw']:.0f} MW")
-        for blabel, bdata in summary.get("storage_details", {}).items():
-            mwh = bdata.get("mwh", 0)
-            mw = bdata.get("mw", 0)
+        print(f"\n  Storage total: {summary['storage_mwh']:.0f} MWh / {summary['storage_mw']:.0f} MW")
+        for slabel, sdata in summary.get("storage_details", {}).items():
+            mwh = sdata.get("mwh", 0)
+            mw = sdata.get("mw", 0)
             if mwh > 0.1:
-                print(f"    {blabel}: {mwh:.0f} MWh / {mw:.0f} MW")
+                print(f"    {slabel}: {mwh:.0f} MWh / {mw:.0f} MW")
 
     print()
     return lcoe

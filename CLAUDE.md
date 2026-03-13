@@ -8,15 +8,24 @@ Replication of "An energy system model-based approach to investigate cost-optima
 pip install -r requirements.txt
 python cuba_model.py              # Run all 6 scenarios
 python cuba_model.py --scenario 4 # Run single scenario
+python calc_investment.py         # Scenario 6 investment breakdown
+python sensitivity_analysis.py    # Fuel price + phased buildout analysis
 ```
 
 ## Project Structure
 
-- `cuba_model.py` — Main model. Builds oemof-solph energy system, solves with HiGHS, prints results. ~790 lines. All technology parameters (Tables 2-5 from paper) are defined as module-level dicts at the top.
+- `cuba_model.py` — Active working model with 2025 cost updates, DSM, pumped hydro option. All technology parameters defined as module-level dicts at the top.
+- `cuba_model_ref_utc.py` — Frozen paper replication with UTC error (best paper match). Do not modify.
+- `cuba_model_ref_local.py` — Frozen paper replication with timezone correction. Do not modify.
+- `cuba_model2.py` — Kevin's version (renamed from his cuba_model.py)
+- `calc_investment.py` — Runs Scenario 6 and prints investment breakdown by technology
+- `sensitivity_analysis.py` — Fuel price sensitivity + phased donor-funded buildout analysis
 - `generate_timeseries.py` — Generates synthetic solar/wind/hydro/demand profiles (fallback if ninja data unavailable)
 - `generate_demand.py` — Improved demand profile based on CubaLinda model and ONEI statistics
 - `integrate_ninja_data.py` — Replaces synthetic RE profiles with real renewables.ninja satellite data
-- `data/timeseries.csv` — 8760-row hourly time series (columns: timestamp, solar_pv, wind, hydro, demand_mwh). This is the active input file.
+- `data/timeseries.csv` — Active input: 8760-row hourly time series (TZ-corrected, multi-site eastern Cuba wind)
+- `data/timeseries_ref_utc.csv` — Frozen paper replication timeseries (UTC, single wind site)
+- `data/timeseries_ref_local.csv` — Frozen paper replication timeseries (TZ-corrected, single wind site)
 - `data/ninja_solar_raw.csv`, `data/ninja_wind_raw.csv` — Real renewables.ninja capacity factors (2019, lat=22 lon=-79.5)
 
 ## Architecture
@@ -25,7 +34,7 @@ Single-node linear optimization model using oemof-solph:
 - **Buses**: electricity, crude_oil, hfo, diesel, natural_gas, biomass
 - **Sources**: fuel commodity sources, renewable generators (solar PV, wind, hydro)
 - **Converters**: thermal power plants (oil, CCGT, diesel genset, HFO genset, bioelectric)
-- **Storage**: Li-ion battery (investment-optimized)
+- **Storage**: Li-ion battery + pumped hydro (investment-optimized)
 - **Sinks**: demand (fixed profile), excess/curtailment
 
 ## 6 Scenarios
@@ -46,8 +55,11 @@ Uses HiGHS via pyomo's APPSI interface (`pyomo.contrib.appsi.solvers.Highs`). CB
 For solar optimization work, the most relevant parameters are in the module-level dicts:
 
 - `RENEWABLES["solar_pv"]` — capex, installed capacity, max capacity
-- `BATTERY` — storage costs, efficiency, c-rate
+- `BATTERIES` / `BATTERY` — Li-ion storage costs, efficiency, c-rate
+- `PUMPED_HYDRO` — pumped hydro storage costs, efficiency, capacity limits
 - `FUEL_PRICES` — changing fuel costs shifts the cost-optimal RE share
+- `TARGET_DEMAND_TWH` — annual demand target (currently 21.3 TWh)
+- `DSM_SHIFT_FRACTION` — demand-side management evening-to-midday shift (currently 30%)
 - `WACC` — discount rate (currently 7.5%)
 - Solar capacity factors come from `data/timeseries.csv` column `solar_pv`
 
@@ -58,7 +70,9 @@ Custom pyomo constraint added in `solve_model()`. Reformulated as linear inequal
 RE_gen * (1 - target) >= nonRE_gen * target
 ```
 
-## Results Reference (Paper Table 6)
+## Results Reference
+
+### Paper (Brandts et al. 2024, Table 6)
 
 | Scenario | RES % | LCOE (ct/kWh) | Investment (Bn USD) |
 |----------|-------|---------------|---------------------|
@@ -66,3 +80,27 @@ RE_gen * (1 - target) >= nonRE_gen * target
 | 2 37% Review | 37 | 9.5 | 4.0 |
 | 4 Cost-Optimal | 83 | 7.3 | 9.3 |
 | 6 100% Alt | 100 | 11.3 | 25.8 |
+
+### Working Model (2025 costs, 21.3 TWh demand, DSM)
+
+| Scenario | RES % | LCOE (ct/kWh) | Investment (Bn USD) |
+|----------|-------|---------------|---------------------|
+| 1 BAU | 24.5 | 8.8 | 0 |
+| 4 Cost-Optimal | 85.6 | 6.0 | 5.6 |
+| 6 100% Alt | 100 | 8.8 | 16.3 |
+
+## Sensitivity Analysis
+
+`sensitivity_analysis.py` provides two analyses:
+
+### Fuel Price Sensitivity
+Runs BAU and Cost-Optimal at 1x, 1.5x, 2x, 3x fossil fuel prices (biomass held constant). Key finding: BAU LCOE rises 2.8x when fuel triples, cost-optimal rises only 1.1x.
+
+### Phased Buildout
+Models donor-funded solar+battery packages ($1-5 Bn, 60/40 cost split) added to BAU at various fuel prices. Uses `build_energy_system()` with `extra_solar_mw` and `extra_battery_mwh` parameters. All dispatch-only solves (fast).
+
+```bash
+python sensitivity_analysis.py --fuel-sensitivity  # Just fuel prices (~16 min)
+python sensitivity_analysis.py --phased-buildout   # Just buildout (~7 min)
+python sensitivity_analysis.py                     # Both analyses
+```
