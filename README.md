@@ -41,30 +41,19 @@ To run all 6 scenarios (takes several minutes):
 python cuba_model.py
 ```
 
-For investment breakdown and sensitivity analysis:
-```powershell
-python calc_investment.py          # Scenario 6 investment breakdown
-python sensitivity_analysis.py     # Fuel price sensitivity + donor-funded buildout
-```
-
 ## Project Structure
 
 ```
 cuba_model.py              Active working model (2025 costs, DSM, pumped hydro)
-cuba_model_ref_utc.py      Frozen paper replication (UTC error, best paper match)
-cuba_model_ref_local.py    Frozen paper replication (timezone-corrected)
-cuba_model2.py             Kevin's version
-calc_investment.py         Investment breakdown for Scenario 6
-sensitivity_analysis.py    Fuel price sensitivity + phased buildout analysis
+improve_timeseries.py      Generates timeseries from ninja source data (TZ fix, multi-site wind)
 generate_timeseries.py     Synthetic time series generator (fallback)
 generate_demand.py         Improved demand profiles
 integrate_ninja_data.py    Swap in real renewables.ninja data
 data/
   timeseries.csv           Active hourly input (TZ-corrected, multi-site wind)
-  timeseries_ref_utc.csv   Frozen paper replication timeseries (UTC)
-  timeseries_ref_local.csv Frozen paper replication timeseries (TZ-corrected)
   ninja_solar_raw.csv      Real solar capacity factors from renewables.ninja
   ninja_wind_raw.csv       Real wind capacity factors from renewables.ninja
+  ninja_wind_*_raw.csv     Eastern Cuba wind sites (Gibara, Las Tunas, Camagüey)
   onei/                    Official Cuban energy statistics (ONEI 2024)
 ```
 
