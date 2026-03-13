@@ -8,25 +8,18 @@ Replication of "An energy system model-based approach to investigate cost-optima
 pip install -r requirements.txt
 python cuba_model.py              # Run all 6 scenarios
 python cuba_model.py --scenario 4 # Run single scenario
-python calc_investment.py         # Scenario 6 investment breakdown
-python sensitivity_analysis.py    # Fuel price + phased buildout analysis
 ```
 
 ## Project Structure
 
 - `cuba_model.py` — Active working model with 2025 cost updates, DSM, pumped hydro option. All technology parameters defined as module-level dicts at the top.
-- `cuba_model_ref_utc.py` — Frozen paper replication with UTC error (best paper match). Do not modify.
-- `cuba_model_ref_local.py` — Frozen paper replication with timezone correction. Do not modify.
-- `cuba_model2.py` — Kevin's version (renamed from his cuba_model.py)
-- `calc_investment.py` — Runs Scenario 6 and prints investment breakdown by technology
-- `sensitivity_analysis.py` — Fuel price sensitivity + phased donor-funded buildout analysis
+- `improve_timeseries.py` — Generates timeseries from ninja source data (TZ fix, multi-site wind)
 - `generate_timeseries.py` — Generates synthetic solar/wind/hydro/demand profiles (fallback if ninja data unavailable)
 - `generate_demand.py` — Improved demand profile based on CubaLinda model and ONEI statistics
 - `integrate_ninja_data.py` — Replaces synthetic RE profiles with real renewables.ninja satellite data
 - `data/timeseries.csv` — Active input: 8760-row hourly time series (TZ-corrected, multi-site eastern Cuba wind)
-- `data/timeseries_ref_utc.csv` — Frozen paper replication timeseries (UTC, single wind site)
-- `data/timeseries_ref_local.csv` — Frozen paper replication timeseries (TZ-corrected, single wind site)
 - `data/ninja_solar_raw.csv`, `data/ninja_wind_raw.csv` — Real renewables.ninja capacity factors (2019, lat=22 lon=-79.5)
+- `data/ninja_wind_*_raw.csv` — Eastern Cuba wind sites (Gibara, Las Tunas, Camagüey)
 
 ## Architecture
 
@@ -89,18 +82,3 @@ RE_gen * (1 - target) >= nonRE_gen * target
 | 4 Cost-Optimal | 85.6 | 6.0 | 5.6 |
 | 6 100% Alt | 100 | 8.8 | 16.3 |
 
-## Sensitivity Analysis
-
-`sensitivity_analysis.py` provides two analyses:
-
-### Fuel Price Sensitivity
-Runs BAU and Cost-Optimal at 1x, 1.5x, 2x, 3x fossil fuel prices (biomass held constant). Key finding: BAU LCOE rises 2.8x when fuel triples, cost-optimal rises only 1.1x.
-
-### Phased Buildout
-Models donor-funded solar+battery packages ($1-5 Bn, 60/40 cost split) added to BAU at various fuel prices. Uses `build_energy_system()` with `extra_solar_mw` and `extra_battery_mwh` parameters. All dispatch-only solves (fast).
-
-```bash
-python sensitivity_analysis.py --fuel-sensitivity  # Just fuel prices (~16 min)
-python sensitivity_analysis.py --phased-buildout   # Just buildout (~7 min)
-python sensitivity_analysis.py                     # Both analyses
-```
